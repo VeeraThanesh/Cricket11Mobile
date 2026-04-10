@@ -9,3 +9,7 @@ export const register = (data: {
   password: string;
   role?: string;
 }) => axiosClient.post('/createUser', data);
+
+export const refreshTokenApi = () => axiosClient.post('/refreshToken');
+
+export const logoutApi = () => axiosClient.post('/logout');
