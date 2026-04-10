@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { getMatch } from '../../api/matchApi';
-import { addBall, undoBall, updateCurrentPlayers, startSecondInnings } from '../../api/ballApi';
+import { addBall, undoBall, updateCurrentPlayers, startSecondInnings, getBalls } from '../../api/ballApi';
 import { Colors } from '../../theme/styles';
 
 // Types
@@ -69,6 +69,7 @@ export default function LiveScoringScreen() {
 
   // Ball history display
   const [lastBalls, setLastBalls] = useState<string[]>([]);
+  const [inningsBalls, setInningsBalls] = useState<any[]>([]);
 
   useEffect(() => { loadMatch(); }, []);
 
@@ -107,6 +108,15 @@ export default function LiveScoringScreen() {
         setStrikerId(activeInnings.currentStrikerId?._id || '');
         setNonStrikerId(activeInnings.currentNonStrikerId?._id || '');
         setBowlerId(activeInnings.currentBowlerId?._id || '');
+
+        try {
+          const ballsRes = await getBalls(matchId, activeInnings.inningsNo);
+          if (ballsRes.data?.data) {
+            setInningsBalls(ballsRes.data.data);
+          }
+        } catch (e) {
+          console.log('Error fetching balls', e);
+        }
       }
     } catch (err) {
       Alert.alert('Error', 'Could not load match');
@@ -131,6 +141,9 @@ export default function LiveScoringScreen() {
       const updatedInnings = res.data?.data?.innings;
       if (updatedInnings) setInnings(updatedInnings);
 
+      const newBall = res.data?.data?.ball;
+      if (newBall) setInningsBalls((prev) => [...prev, newBall]);
+
       // Update last balls display
       const ballLabel = extras?.type === 'wide' ? 'WD' :
         extras?.type === 'noBall' ? 'NB' :
@@ -143,6 +156,17 @@ export default function LiveScoringScreen() {
       // Check if innings is over
       if (res.data?.data?.inningsOver) {
         handleInningsOver(updatedInnings);
+      } else {
+        // Auto swap logic
+        const runsRun = (extras?.type === 'wide' || extras?.type === 'bye' || extras?.type === 'legBye') 
+          ? extras.value 
+          : batRuns;
+        const isOddRun = runsRun % 2 !== 0;
+        const overComplete = res.data?.data?.overComplete;
+        
+        if (isOddRun !== overComplete) {
+           await swapBatsmen();
+        }
       }
     } catch (err: any) {
       Alert.alert('Error', err?.response?.data?.message || 'Failed to record ball');
@@ -166,6 +190,10 @@ export default function LiveScoringScreen() {
       const res = await addBall(payload);
       const updatedInnings = res.data?.data?.innings;
       if (updatedInnings) setInnings(updatedInnings);
+      
+      const newBall = res.data?.data?.ball;
+      if (newBall) setInningsBalls((prev) => [...prev, newBall]);
+
       setLastBalls((prev) => [...prev.slice(-11), 'W']);
 
       // Reset wicket state
@@ -198,6 +226,7 @@ export default function LiveScoringScreen() {
             const updatedInnings = res.data?.data?.innings;
             if (updatedInnings) setInnings(updatedInnings);
             setLastBalls((prev) => prev.slice(0, -1));
+            setInningsBalls((prev) => prev.slice(0, -1));
           } catch {
             Alert.alert('Error', 'Could not undo');
           }
@@ -221,6 +250,7 @@ export default function LiveScoringScreen() {
                   setInnings(newInnings);
                   setInningsId(newInnings._id);
                   setLastBalls([]);
+                  setInningsBalls([]);
                   setStrikerId('');
                   setNonStrikerId('');
                   setBowlerId('');
@@ -255,8 +285,13 @@ export default function LiveScoringScreen() {
       setBowlerId(playerId);
       await updateCurrentPlayers(inningsId, { currentBowlerId: playerId });
     } else if (showPlayerModal === 'newBatsman') {
-      setStrikerId(playerId);
-      await updateCurrentPlayers(inningsId, { currentStrikerId: playerId });
+      if (innings?.dismissedBatsmanIds?.includes(nonStrikerId)) {
+        setNonStrikerId(playerId);
+        await updateCurrentPlayers(inningsId, { currentNonStrikerId: playerId });
+      } else {
+        setStrikerId(playerId);
+        await updateCurrentPlayers(inningsId, { currentStrikerId: playerId });
+      }
     }
   };
 
@@ -271,6 +306,78 @@ export default function LiveScoringScreen() {
     list.find((p: any) => p._id === id)?.name || 'Select';
 
   if (loading) return <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background }}><ActivityIndicator color={Colors.accent} size="large" /></View>;
+
+  // Bowler stats calculation
+  const bowlerBalls = inningsBalls.filter((b: any) =>
+    (b.bowlerId?._id || b.bowlerId) === bowlerId
+  );
+  let bLegalBalls = 0, bRuns = 0, bWickets = 0;
+  bowlerBalls.forEach((b: any) => {
+    if (b.isLegalBall) bLegalBalls++;
+    bRuns += b.totalRuns;
+    if (b.isWicket && !['runOut', 'retiredHurt', 'obstructingTheField'].includes(b.wicket?.type)) bWickets++;
+  });
+  const bOvers = formatOvers(bLegalBalls);
+
+  // Current over balls calculation
+  const totalLegal = innings?.totalLegalBalls || 0;
+  let currentOverNo = Math.floor(totalLegal / 6);
+  let currentOverBalls = inningsBalls.filter((b: any) => b.overNo === currentOverNo);
+
+  if (currentOverBalls.length === 0 && totalLegal > 0) {
+    const lastOverBalls = inningsBalls.filter((b: any) => b.overNo === currentOverNo - 1);
+    if (lastOverBalls.length > 0 && (lastOverBalls[0].bowlerId?._id || lastOverBalls[0].bowlerId) === bowlerId) {
+      currentOverBalls = lastOverBalls;
+    }
+  }
+
+  const renderOverBox = (ball?: any, idx?: number) => {
+    if (!ball) {
+      return <View key={`empty-${idx}`} style={[styles.overBox, { borderStyle: 'dashed', borderColor: 'rgba(255,255,255,0.2)' }]} />;
+    }
+    let label = '';
+    let isDot = false;
+    let color = Colors.text;
+    let borderColor = 'rgba(255,255,255,0.4)';
+
+    if (ball.isWicket) {
+      label = 'W';
+      color = '#FF5252'; // More vibrant for dark background
+      borderColor = '#FF5252';
+    } else if (ball.extras?.type === 'wide') {
+      label = 'WD';
+      color = '#FFC107';
+      borderColor = '#FFC107';
+    } else if (ball.extras?.type === 'noBall') {
+      label = 'NB';
+      color = '#FF9800';
+      borderColor = '#FF9800';
+    } else if (ball.batRuns === 4) {
+      label = '4';
+      color = '#4FC3F7';
+      borderColor = '#4FC3F7';
+    } else if (ball.batRuns === 6) {
+      label = '6';
+      color = '#BA68C8';
+      borderColor = '#BA68C8';
+    } else if (ball.totalRuns === 0) {
+      isDot = true;
+      borderColor = '#4CAF50';
+    } else {
+      label = ball.totalRuns.toString();
+      color = '#FFFFFF';
+    }
+
+    return (
+      <View key={ball._id || `ball-${idx}`} style={[styles.overBox, { borderColor }]}>
+        {isDot ? (
+          <View style={styles.overBoxDot} />
+        ) : (
+          <Text style={[styles.overBoxText, { color }]}>{label}</Text>
+        )}
+      </View>
+    );
+  };
 
   const legalBalls = innings?.totalLegalBalls || 0;
   const totalRuns = innings?.totalRuns || 0;
@@ -318,7 +425,7 @@ export default function LiveScoringScreen() {
       {lastBalls.length > 0 && (
         <View style={styles.ballsRow}>
           <Text style={styles.ballsLabel}>This over:</Text>
-          {lastBalls.slice(-6).map((b, i) => (
+          {lastBalls.slice(-12).map((b, i) => (
             <View key={i} style={[styles.ballChip, {
               backgroundColor: b === 'W' ? Colors.wicket : b === 'WD' ? Colors.wide : b === 'NB' ? Colors.noBall : b === '4' ? Colors.boundary4 : b === '6' ? Colors.boundary6 : b === '•' ? Colors.dot : Colors.primaryDark,
             }]}>
@@ -343,9 +450,25 @@ export default function LiveScoringScreen() {
             <Text style={styles.playerName}>{playerName(nonStrikerId, battingTeamPlayers)}</Text>
           </TouchableOpacity>
         </View>
-        <TouchableOpacity style={[styles.playerCard, { marginHorizontal: 16, marginBottom: 16 }]} onPress={() => setShowPlayerModal('bowler')}>
-          <Text style={styles.playerLabel}>🎳 Bowler</Text>
-          <Text style={styles.playerName}>{playerName(bowlerId, bowlingTeamPlayers)}</Text>
+        <TouchableOpacity style={styles.bowlerCard} activeOpacity={0.8} onPress={() => setShowPlayerModal('bowler')}>
+          <View style={styles.bowlerInfo}>
+            <View style={styles.bowlerAvatar}>
+              <Text style={styles.bowlerAvatarIcon}>🥎</Text>
+            </View>
+            <View style={styles.bowlerDetails}>
+              <Text style={styles.bowlerLabel}>Current Bowler</Text>
+              <Text style={styles.bowlerCardName} numberOfLines={1}>{playerName(bowlerId, bowlingTeamPlayers)}</Text>
+            </View>
+            <View style={styles.bowlerCardStatsBox}>
+              <Text style={styles.bowlerCardStatsValue}>{bWickets}-{bRuns}</Text>
+              <Text style={styles.bowlerCardStatsLabel}>{bOvers} ov</Text>
+            </View>
+          </View>
+          <View style={styles.overBoxesContainer}>
+            {Array.from({ length: Math.max(6, currentOverBalls.length) }).map((_, i) =>
+              renderOverBox(currentOverBalls[i], i)
+            )}
+          </View>
         </TouchableOpacity>
 
         {/* Extras Selector */}
@@ -418,7 +541,7 @@ export default function LiveScoringScreen() {
             </View>
 
             <Text style={styles.modalLabel}>Dismissed Batsman</Text>
-            {battingTeamPlayers.filter((p: any) => p._id !== nonStrikerId).map((p: any) => (
+            {battingTeamPlayers.filter((p: any) => p._id === strikerId || p._id === nonStrikerId).map((p: any) => (
               <TouchableOpacity key={p._id} style={[styles.playerOption, dismissedBatsmanId === p._id && styles.playerOptionSelected]} onPress={() => setDismissedBatsmanId(p._id)}>
                 <Text style={{ color: Colors.text }}>{p.name}</Text>
               </TouchableOpacity>
@@ -462,7 +585,8 @@ export default function LiveScoringScreen() {
                     // Exclude players who are already out
                     if (innings?.dismissedBatsmanIds?.includes(p._id)) return false;
                     
-                    if (showPlayerModal === 'striker' || showPlayerModal === 'newBatsman') return p._id !== nonStrikerId;
+                    if (showPlayerModal === 'newBatsman') return p._id !== nonStrikerId && p._id !== strikerId;
+                    if (showPlayerModal === 'striker') return p._id !== nonStrikerId;
                     if (showPlayerModal === 'nonStriker') return p._id !== strikerId;
                     return true;
                   })
@@ -505,6 +629,102 @@ const styles = StyleSheet.create({
   playerName: { color: Colors.text, fontWeight: '700', fontSize: 13 },
   swapBtn: { backgroundColor: Colors.primaryDark, borderRadius: 8, padding: 10 },
   swapIcon: { color: Colors.accent, fontSize: 18 },
+  bowlerCard: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    shadowColor: Colors.accent,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  bowlerInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  bowlerAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.accent + '22',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  bowlerAvatarIcon: {
+    fontSize: 20,
+  },
+  bowlerDetails: {
+    flex: 1,
+  },
+  bowlerLabel: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    letterSpacing: 0.5,
+    marginBottom: 2,
+    textTransform: 'uppercase',
+  },
+  bowlerCardName: {
+    color: Colors.text,
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  bowlerCardStatsBox: {
+    alignItems: 'flex-end',
+    backgroundColor: Colors.surfaceAlt,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  bowlerCardStatsValue: {
+    color: Colors.accent,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  bowlerCardStatsLabel: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  overBoxesContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: Colors.surfaceAlt,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  overBox: {
+    flex: 1,
+    aspectRatio: 1,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  overBoxDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.textMuted,
+  },
+  overBoxText: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
   sectionLabel: { color: Colors.textMuted, fontSize: 11, letterSpacing: 1, marginHorizontal: 16, marginTop: 12, marginBottom: 6 },
   extrasRow: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 12, gap: 6, marginBottom: 4 },
   extraChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.surface },

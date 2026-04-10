@@ -4,27 +4,47 @@ import {
   ActivityIndicator, Alert,
 } from 'react-native';
 import { useRoute } from '@react-navigation/native';
-import { getScorecard } from '../../api/matchApi';
+import { getScorecard, getMatch } from '../../api/matchApi';
 import { Colors, GlobalStyles } from '../../theme/styles';
 
 export default function ScorecardScreen() {
   const route = useRoute<any>();
   const { matchId } = route.params;
   const [data, setData] = useState<any[]>([]);
+  const [matchData, setMatchData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getScorecard(matchId)
-      .then((res) => setData(res.data?.data || []))
+    Promise.all([
+      getScorecard(matchId),
+      getMatch(matchId)
+    ])
+      .then(([scorecardRes, matchRes]) => {
+        setData(scorecardRes.data?.data || []);
+        setMatchData(matchRes.data?.data?.match);
+      })
       .catch(() => Alert.alert('Error', 'Could not load scorecard'))
       .finally(() => setLoading(false));
   }, [matchId]);
 
   if (loading) return <View style={GlobalStyles.centered}><ActivityIndicator color={Colors.accent} size="large" /></View>;
 
+  const result = matchData?.result;
+  const winner = matchData?.team1Id?._id === result?.winnerId ? matchData?.team1Id : matchData?.team2Id;
+  const isTie = result?.type === 'tie';
+
   return (
     <SafeAreaView style={GlobalStyles.screen}>
       <ScrollView>
+        {result && (
+          <View style={styles.resultBanner}>
+            <Text style={styles.resultBannerText}>
+              {isTie 
+                ? 'Match Tied' 
+                : `${winner?.name || 'Team'} won by ${result.margin} ${result.type}`}
+            </Text>
+          </View>
+        )}
         {data.map((inn, idx) => (
           <View key={inn.innings._id}>
             <View style={styles.inningsHeader}>
@@ -52,7 +72,14 @@ export default function ScorecardScreen() {
                   <View style={styles.col1}>
                     <Text style={styles.playerCell}>{b.player.name}</Text>
                     <Text style={styles.dismissalCell}>
-                      {b.isOut ? (b.wicketInfo?.type || 'out') : 'not out'}
+                      {b.isOut ? (
+                        b.wicketInfo?.type === 'caught' ? `c ${b.wicketInfo?.fielderId?.name || ''}` :
+                        b.wicketInfo?.type === 'runOut' ? `run out ${b.wicketInfo?.fielderId ? '(' + b.wicketInfo.fielderId.name + ')' : ''}` :
+                        b.wicketInfo?.type === 'stumped' ? `st ${b.wicketInfo?.fielderId?.name || ''}` :
+                        b.wicketInfo?.type === 'bowled' ? 'b' :
+                        b.wicketInfo?.type === 'lbw' ? 'lbw' :
+                        (b.wicketInfo?.type || 'out')
+                      ) : 'not out'}
                     </Text>
                   </View>
                   <Text style={[styles.col2, styles.numCell]}>{b.runs}</Text>
@@ -103,6 +130,19 @@ export default function ScorecardScreen() {
 }
 
 const styles = StyleSheet.create({
+  resultBanner: {
+    backgroundColor: Colors.surface,
+    padding: 12,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  resultBannerText: {
+    color: Colors.accent,
+    fontSize: 16,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
   inningsHeader: { backgroundColor: Colors.primaryDark, padding: 16 },
   inningsTitle: { color: Colors.textSecondary, fontSize: 13 },
   inningsScore: { color: Colors.text, fontSize: 22, fontWeight: '800', marginTop: 4 },
