@@ -23,6 +23,12 @@ export default function CreateTeamScreen() {
   const [selectedIds, setSelectedIds] = useState<string[]>(
     existing?.playerIds?.map((p: any) => (typeof p === 'string' ? p : p._id)) || []
   );
+  const [captainId, setCaptainId] = useState<string>(existing?.captainId || '');
+  const [viceCaptainId, setViceCaptainId] = useState<string>(existing?.viceCaptainId || '');
+  const [wicketKeeperId, setWicketKeeperId] = useState<string>(existing?.wicketKeeperId || '');
+  const [substituteIds, setSubstituteIds] = useState<string[]>(
+    existing?.substituteIds?.map((p: any) => (typeof p === 'string' ? p : p._id)) || []
+  );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -34,16 +40,33 @@ export default function CreateTeamScreen() {
   }, []);
 
   const togglePlayer = (id: string) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+    setSelectedIds((prev) => {
+      if (prev.includes(id)) {
+        if (captainId === id) setCaptainId('');
+        if (viceCaptainId === id) setViceCaptainId('');
+        if (wicketKeeperId === id) setWicketKeeperId('');
+        setSubstituteIds((subPrev) => subPrev.filter((x) => x !== id));
+        return prev.filter((x) => x !== id);
+      } else {
+        return [...prev, id];
+      }
+    });
+  };
+
+  const toggleSubstitute = (id: string) => {
+    setSubstituteIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   };
 
   const handleSave = async () => {
     if (!name) return Alert.alert('Error', 'Team name is required');
+    if (selectedIds.length === 0) return Alert.alert('Error', 'Please select at least one player');
+    if (!captainId) return Alert.alert('Error', 'Please assign a Captain');
+    if (!viceCaptainId) return Alert.alert('Error', 'Please assign a Vice Captain');
+    if (!wicketKeeperId) return Alert.alert('Error', 'Please assign a Wicket Keeper');
+    
     setSaving(true);
     try {
-      const payload = { name, playerIds: selectedIds };
+      const payload = { name, playerIds: selectedIds, captainId, viceCaptainId, wicketKeeperId, substituteIds };
       if (existing) {
         await updateTeam(existing._id, payload);
         Alert.alert('Success', 'Team updated');
@@ -96,6 +119,30 @@ export default function CreateTeamScreen() {
                   {item.role} {item.jerseyNo ? `• #${item.jerseyNo}` : ''}
                 </Text>
               </View>
+              {selected && (
+                <View style={styles.roleBadges}>
+                  <TouchableOpacity
+                    style={[styles.roleBadgeBtn, captainId === item._id && styles.roleBadgeBtnActive]}
+                    onPress={() => setCaptainId(item._id)}>
+                    <Text style={[styles.roleBadgeText, captainId === item._id && styles.roleBadgeTextActive]}>C</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.roleBadgeBtn, viceCaptainId === item._id && styles.roleBadgeBtnActive]}
+                    onPress={() => setViceCaptainId(item._id)}>
+                    <Text style={[styles.roleBadgeText, viceCaptainId === item._id && styles.roleBadgeTextActive]}>VC</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.roleBadgeBtn, wicketKeeperId === item._id && styles.roleBadgeBtnActive]}
+                    onPress={() => setWicketKeeperId(item._id)}>
+                    <Text style={[styles.roleBadgeText, wicketKeeperId === item._id && styles.roleBadgeTextActive]}>WK</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.roleBadgeBtn, substituteIds.includes(item._id) && styles.roleBadgeBtnActive]}
+                    onPress={() => toggleSubstitute(item._id)}>
+                    <Text style={[styles.roleBadgeText, substituteIds.includes(item._id) && styles.roleBadgeTextActive]}>SUB</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </TouchableOpacity>
           );
         }}
@@ -123,5 +170,10 @@ const styles = StyleSheet.create({
   checkmark: { color: Colors.text, fontWeight: '700', fontSize: 14 },
   playerName: { color: Colors.text, fontWeight: '600', fontSize: 14 },
   roleText: { fontSize: 12, fontWeight: '600', marginTop: 2 },
+  roleBadges: { flexDirection: 'row', gap: 6, marginLeft: 8 },
+  roleBadgeBtn: { width: 32, height: 32, borderRadius: 16, borderWidth: 1, borderColor: Colors.border, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.surfaceAlt },
+  roleBadgeBtnActive: { backgroundColor: Colors.accent, borderColor: Colors.accent },
+  roleBadgeText: { fontSize: 10, fontWeight: '700', color: Colors.textSecondary },
+  roleBadgeTextActive: { color: Colors.background },
   footer: { padding: 16, paddingBottom: 24, backgroundColor: Colors.background, borderTopWidth: 1, borderTopColor: Colors.border },
 });

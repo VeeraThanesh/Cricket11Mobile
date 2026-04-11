@@ -53,7 +53,7 @@ export default function MatchListScreen() {
               onPress={() => {
                 if (item.status === 'completed') navigation.navigate('Scorecard', { matchId: item._id });
                 else if (item.status === 'toss') navigation.navigate('Toss', { matchId: item._id });
-                // live → would navigate to LiveScoring but we'd need inningsId
+                else if (item.status === 'live' || item.status === 'interrupted') navigation.navigate('LiveScoring', { matchId: item._id });
               }}>
               <View style={GlobalStyles.spaceBetween}>
                 <Text style={styles.matchName}>{item.name}</Text>

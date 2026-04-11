@@ -22,7 +22,7 @@ export type MainStackParamList = {
   CreateTeam: { team?: any };
   MatchSetup: { match?: any };
   Toss: { matchId: string };
-  LiveScoring: { matchId: string; inningsId: string };
+  LiveScoring: { matchId: string; inningsId?: string };
   Scorecard: { matchId: string };
   MatchResult: { matchId: string };
 };

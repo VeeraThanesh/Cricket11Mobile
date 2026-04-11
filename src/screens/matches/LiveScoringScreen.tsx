@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, SafeAreaView,
-  Alert, Modal, ScrollView, StatusBar, ActivityIndicator,
+  Alert, Modal, ScrollView, StatusBar, ActivityIndicator, TextInput, Platform,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import { getMatch } from '../../api/matchApi';
+import { getMatch, completeMatch } from '../../api/matchApi';
 import { addBall, undoBall, updateCurrentPlayers, startSecondInnings, getBalls } from '../../api/ballApi';
 import { Colors } from '../../theme/styles';
 
@@ -21,6 +21,14 @@ const WICKET_TYPES: { key: WicketType; label: string }[] = [
   { key: 'hitWicket', label: 'Hit Wicket' },
   { key: 'retiredHurt', label: 'Retired Hurt' },
   { key: 'obstructingTheField', label: 'Obstructing Field' },
+];
+
+const END_REASONS = [
+  { key: 'normal', label: 'Normal / Overs Done' },
+  { key: 'declare', label: 'Declared (Match Setup)' },
+  { key: 'rain', label: 'Rainy / Bad Weather' },
+  { key: 'postponed', label: 'Postponed / Abandoned' },
+  { key: 'other', label: 'Other Reason' },
 ];
 
 function formatOvers(legalBalls: number) {
@@ -62,13 +70,19 @@ export default function LiveScoringScreen() {
   const [extraType, setExtraType] = useState<ExtraType>('none');
   const [showWicketModal, setShowWicketModal] = useState(false);
   const [showPlayerModal, setShowPlayerModal] = useState<'striker' | 'nonStriker' | 'bowler' | 'newBatsman' | null>(null);
+  const [showReasonModal, setShowReasonModal] = useState<'striker' | 'nonStriker' | 'bowler' | null>(null);
+  const [changeReason, setChangeReason] = useState<'injury' | 'other' | ''>('');
+  const [changeDescription, setChangeDescription] = useState('');
+  const [pendingPlayerId, setPendingPlayerId] = useState<string>('');
   const [wicketType, setWicketType] = useState<WicketType | ''>('');
   const [fielderId, setFielderId] = useState('');
   const [dismissedBatsmanId, setDismissedBatsmanId] = useState('');
   const [saving, setSaving] = useState(false);
+  const [showEndInningsModal, setShowEndInningsModal] = useState(false);
+  const [endInningsReason, setEndInningsReason] = useState('normal');
+  const [otherReasonText, setOtherReasonText] = useState('');
 
   // Ball history display
-  const [lastBalls, setLastBalls] = useState<string[]>([]);
   const [inningsBalls, setInningsBalls] = useState<any[]>([]);
 
   useEffect(() => { loadMatch(); }, []);
@@ -144,13 +158,7 @@ export default function LiveScoringScreen() {
       const newBall = res.data?.data?.ball;
       if (newBall) setInningsBalls((prev) => [...prev, newBall]);
 
-      // Update last balls display
-      const ballLabel = extras?.type === 'wide' ? 'WD' :
-        extras?.type === 'noBall' ? 'NB' :
-        batRuns === 4 ? '4' :
-        batRuns === 6 ? '6' :
-        batRuns === 0 ? '•' : batRuns.toString();
-      setLastBalls((prev) => [...prev.slice(-11), ballLabel]);
+      // Clear extras
       setExtraType('none');
 
       // Check if innings is over
@@ -166,6 +174,11 @@ export default function LiveScoringScreen() {
         
         if (isOddRun !== overComplete) {
            await swapBatsmen();
+        }
+
+        if (overComplete && !res.data?.data?.inningsOver) {
+          setBowlerId('');
+          setShowPlayerModal('bowler');
         }
       }
     } catch (err: any) {
@@ -194,8 +207,6 @@ export default function LiveScoringScreen() {
       const newBall = res.data?.data?.ball;
       if (newBall) setInningsBalls((prev) => [...prev, newBall]);
 
-      setLastBalls((prev) => [...prev.slice(-11), 'W']);
-
       // Reset wicket state
       setShowWicketModal(false);
       setWicketType('');
@@ -205,6 +216,9 @@ export default function LiveScoringScreen() {
 
       // Prompt for new batsman
       if (!res.data?.data?.inningsOver) {
+        if (res.data?.data?.overComplete) {
+          setBowlerId('');
+        }
         setShowPlayerModal('newBatsman');
       } else {
         handleInningsOver(updatedInnings);
@@ -225,7 +239,6 @@ export default function LiveScoringScreen() {
             const res = await undoBall(matchId);
             const updatedInnings = res.data?.data?.innings;
             if (updatedInnings) setInnings(updatedInnings);
-            setLastBalls((prev) => prev.slice(0, -1));
             setInningsBalls((prev) => prev.slice(0, -1));
           } catch {
             Alert.alert('Error', 'Could not undo');
@@ -249,7 +262,6 @@ export default function LiveScoringScreen() {
                 if (newInnings) {
                   setInnings(newInnings);
                   setInningsId(newInnings._id);
-                  setLastBalls([]);
                   setInningsBalls([]);
                   setStrikerId('');
                   setNonStrikerId('');
@@ -274,25 +286,81 @@ export default function LiveScoringScreen() {
   };
 
   const selectPlayer = async (playerId: string) => {
-    setShowPlayerModal(null);
-    if (showPlayerModal === 'striker') {
+    // Determine if we need to ask for a reason for the change
+    const totalLegal = innings?.totalLegalBalls || 0;
+    const currentOverNo = Math.floor(totalLegal / 6);
+    const hasBallsInOver = inningsBalls.some((b: any) => b.overNo === currentOverNo);
+    
+    // It's a mid-over if we're not exactly at a multiple of 6 legal balls,
+    // OR if we are at a multiple of 6 but illegal balls (wides/no-balls) have started the over.
+    const isMidOver = (totalLegal === 0 && hasBallsInOver) || (totalLegal % 6 !== 0) || (totalLegal > 0 && totalLegal % 6 === 0 && hasBallsInOver);
+
+    const requiresReason = 
+      (showPlayerModal === 'striker' && strikerId) ||
+      (showPlayerModal === 'nonStriker' && nonStrikerId) ||
+      (showPlayerModal === 'bowler' && bowlerId && isMidOver);
+
+    if (requiresReason && showPlayerModal) {
+      setPendingPlayerId(playerId);
+      setShowReasonModal(showPlayerModal as 'striker' | 'nonStriker' | 'bowler');
+      setShowPlayerModal(null);
+    } else {
+      const currentRole = showPlayerModal as string;
+      setShowPlayerModal(null);
+      await executePlayerChange(currentRole, playerId);
+    }
+  };
+
+  const executePlayerChange = async (role: string, playerId: string, reasonData?: any) => {
+    let payload: any = {};
+    if (role === 'striker') {
       setStrikerId(playerId);
-      await updateCurrentPlayers(inningsId, { currentStrikerId: playerId });
-    } else if (showPlayerModal === 'nonStriker') {
+      payload = { currentStrikerId: playerId };
+    } else if (role === 'nonStriker') {
       setNonStrikerId(playerId);
-      await updateCurrentPlayers(inningsId, { currentNonStrikerId: playerId });
-    } else if (showPlayerModal === 'bowler') {
+      payload = { currentNonStrikerId: playerId };
+    } else if (role === 'bowler') {
       setBowlerId(playerId);
-      await updateCurrentPlayers(inningsId, { currentBowlerId: playerId });
-    } else if (showPlayerModal === 'newBatsman') {
+      payload = { currentBowlerId: playerId };
+    } else if (role === 'newBatsman') {
       if (innings?.dismissedBatsmanIds?.includes(nonStrikerId)) {
         setNonStrikerId(playerId);
-        await updateCurrentPlayers(inningsId, { currentNonStrikerId: playerId });
+        payload = { currentNonStrikerId: playerId };
       } else {
         setStrikerId(playerId);
-        await updateCurrentPlayers(inningsId, { currentStrikerId: playerId });
+        payload = { currentStrikerId: playerId };
       }
     }
+    if (reasonData) payload.playerChangeReason = reasonData;
+    await updateCurrentPlayers(inningsId, payload);
+  };
+
+  const confirmPlayerChange = async () => {
+    if (!changeReason) {
+      return Alert.alert('Required', 'Please select a reason (Injury or Other).');
+    }
+    if (!changeDescription.trim()) {
+      return Alert.alert('Required', 'Please enter a description explanation.');
+    }
+    
+    let replacedPlayerId = '';
+    if (showReasonModal === 'striker') replacedPlayerId = strikerId;
+    else if (showReasonModal === 'nonStriker') replacedPlayerId = nonStrikerId;
+    else if (showReasonModal === 'bowler') replacedPlayerId = bowlerId;
+
+    const reasonData = {
+      playerId: replacedPlayerId,
+      role: showReasonModal,
+      reason: changeReason,
+      description: changeDescription.trim()
+    };
+    
+    await executePlayerChange(showReasonModal!, pendingPlayerId, reasonData);
+    
+    setShowReasonModal(null);
+    setChangeReason('');
+    setChangeDescription('');
+    setPendingPlayerId('');
   };
 
   const swapBatsmen = async () => {
@@ -323,6 +391,20 @@ export default function LiveScoringScreen() {
   const totalLegal = innings?.totalLegalBalls || 0;
   let currentOverNo = Math.floor(totalLegal / 6);
   let currentOverBalls = inningsBalls.filter((b: any) => b.overNo === currentOverNo);
+
+  let headerBalls = currentOverBalls;
+  let isPreviousOver = false;
+  if (headerBalls.length === 0 && totalLegal > 0) {
+    headerBalls = inningsBalls.filter((b: any) => b.overNo === currentOverNo - 1);
+    isPreviousOver = true;
+  }
+  const headerBallLabels = headerBalls.map((ball: any) => {
+    if (ball.isWicket) return 'W';
+    if (ball.extras?.type === 'wide') return 'WD';
+    if (ball.extras?.type === 'noBall') return 'NB';
+    const r = ball.batRuns + (ball.extras?.value || 0);
+    return r === 4 ? '4' : r === 6 ? '6' : r === 0 ? '•' : r.toString();
+  });
 
   if (currentOverBalls.length === 0 && totalLegal > 0) {
     const lastOverBalls = inningsBalls.filter((b: any) => b.overNo === currentOverNo - 1);
@@ -422,10 +504,10 @@ export default function LiveScoringScreen() {
       </View>
 
       {/* Last balls */}
-      {lastBalls.length > 0 && (
+      {headerBallLabels.length > 0 && (
         <View style={styles.ballsRow}>
-          <Text style={styles.ballsLabel}>This over:</Text>
-          {lastBalls.slice(-12).map((b, i) => (
+          <Text style={styles.ballsLabel}>{isPreviousOver ? 'Last over:' : 'This over:'}</Text>
+          {headerBallLabels.slice(-12).map((b, i) => (
             <View key={i} style={[styles.ballChip, {
               backgroundColor: b === 'W' ? Colors.wicket : b === 'WD' ? Colors.wide : b === 'NB' ? Colors.noBall : b === '4' ? Colors.boundary4 : b === '6' ? Colors.boundary6 : b === '•' ? Colors.dot : Colors.primaryDark,
             }]}>
@@ -519,8 +601,11 @@ export default function LiveScoringScreen() {
           <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('Scorecard', { matchId })}>
             <Text style={styles.actionText}>📋 Card</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.actionBtn, { borderColor: Colors.error }]} onPress={() => handleInningsOver(innings)}>
-            <Text style={[styles.actionText, { color: Colors.error }]}>End Inn.</Text>
+          <TouchableOpacity style={[styles.actionBtn, { borderColor: Colors.error }]} onPress={() => {
+            setEndInningsReason('normal');
+            setShowEndInningsModal(true);
+          }}>
+            <Text style={[styles.actionText, { color: Colors.error }]}>End Match</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -580,14 +665,22 @@ export default function LiveScoringScreen() {
             </Text>
             <ScrollView style={{ maxHeight: 300 }}>
               {(showPlayerModal === 'bowler'
-                ? bowlingTeamPlayers
+                ? bowlingTeamPlayers.filter((p: any) => {
+                    if (p._id === bowlerId) return false;
+                    const bowlingTeamIdField = innings?.bowlingTeamId?._id || innings?.bowlingTeamId;
+                    const team1Id = match?.team1Id?._id || match?.team1Id;
+                    const bowlingTeamObj = bowlingTeamIdField === team1Id ? match?.team1Id : match?.team2Id;
+                    const bowlingCaptainId = bowlingTeamObj?.captainId?._id || bowlingTeamObj?.captainId;
+                    
+                    return p.role === 'Bowler' || p.role === 'All-rounder' || p._id === bowlingCaptainId;
+                  })
                 : battingTeamPlayers.filter((p: any) => {
                     // Exclude players who are already out
                     if (innings?.dismissedBatsmanIds?.includes(p._id)) return false;
                     
                     if (showPlayerModal === 'newBatsman') return p._id !== nonStrikerId && p._id !== strikerId;
-                    if (showPlayerModal === 'striker') return p._id !== nonStrikerId;
-                    if (showPlayerModal === 'nonStriker') return p._id !== strikerId;
+                    if (showPlayerModal === 'striker') return p._id !== nonStrikerId && p._id !== strikerId;
+                    if (showPlayerModal === 'nonStriker') return p._id !== strikerId && p._id !== nonStrikerId;
                     return true;
                   })
               ).map((item: any) => (
@@ -603,12 +696,113 @@ export default function LiveScoringScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Change Player Reason Modal */}
+      <Modal visible={showReasonModal !== null} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Player Change Reason</Text>
+            <Text style={styles.modalLabel}>Why are you changing the {showReasonModal === 'bowler' ? 'bowler' : 'batsman'}?</Text>
+            
+            <View style={styles.wicketGrid}>
+              <TouchableOpacity style={[styles.wicketChip, changeReason === 'injury' && styles.wicketChipActive]} onPress={() => setChangeReason('injury')}>
+                <Text style={[styles.wicketText, changeReason === 'injury' && styles.wicketTextActive]}>Injury</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.wicketChip, changeReason === 'other' && styles.wicketChipActive]} onPress={() => setChangeReason('other')}>
+                <Text style={[styles.wicketText, changeReason === 'other' && styles.wicketTextActive]}>Other</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TextInput
+              style={styles.reasonInput}
+              placeholder="Enter explanation..."
+              placeholderTextColor={Colors.textMuted}
+              value={changeDescription}
+              onChangeText={setChangeDescription}
+              maxLength={100}
+            />
+
+            <View style={styles.modalBtns}>
+              <TouchableOpacity style={[styles.modalBtn, { backgroundColor: Colors.error }]} onPress={confirmPlayerChange} disabled={saving}>
+                <Text style={{ color: Colors.text, fontWeight: '700' }}>Confirm Change</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, { backgroundColor: Colors.surfaceAlt }]} onPress={() => {
+                setShowReasonModal(null);
+                setChangeReason('');
+                setChangeDescription('');
+                setPendingPlayerId('');
+              }}>
+                <Text style={{ color: Colors.textSecondary, fontWeight: '600' }}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* End Match Modal */}
+      <Modal visible={showEndInningsModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>End Match Options</Text>
+            <Text style={styles.modalLabel}>Select a reason for ending the match:</Text>
+            
+            <View style={styles.wicketGrid}>
+              {END_REASONS.map((r) => (
+                <TouchableOpacity 
+                  key={r.key} 
+                  style={[styles.wicketChip, endInningsReason === r.key && styles.wicketChipActive]} 
+                  onPress={() => setEndInningsReason(r.key)}
+                >
+                  <Text style={[styles.wicketText, endInningsReason === r.key && styles.wicketTextActive]}>{r.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {endInningsReason === 'other' && (
+              <TextInput
+                style={styles.reasonInput}
+                placeholder="Enter description..."
+                placeholderTextColor={Colors.textMuted}
+                value={otherReasonText}
+                onChangeText={setOtherReasonText}
+                maxLength={100}
+              />
+            )}
+
+            <View style={styles.modalBtns}>
+              <TouchableOpacity style={[styles.modalBtn, { backgroundColor: Colors.error }]} onPress={async () => {
+                if (endInningsReason === 'other' && !otherReasonText.trim()) {
+                  Alert.alert('Required', 'Please enter a description to confirm.');
+                  return;
+                }
+                setShowEndInningsModal(false);
+                try {
+                  const reasonLabel = END_REASONS.find(r => r.key === endInningsReason)?.label || endInningsReason;
+                  await completeMatch(matchId, { reason: endInningsReason, reasonLabel, note: otherReasonText.trim() });
+                  if (endInningsReason === 'rain') {
+                    navigation.reset({ index: 0, routes: [{ name: 'Tabs' }] });
+                  } else {
+                    navigation.replace('MatchResult', { matchId });
+                  }
+                } catch(err) {
+                  Alert.alert('Error', 'Could not end match early. Please try again.');
+                }
+              }}>
+                <Text style={{ color: Colors.text, fontWeight: '700' }}>Confirm End Match</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, { backgroundColor: Colors.surfaceAlt }]} onPress={() => setShowEndInningsModal(false)}>
+                <Text style={{ color: Colors.textSecondary, fontWeight: '600' }}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: Colors.background },
+  screen: { flex: 1, backgroundColor: Colors.background, paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
   header: { backgroundColor: Colors.primaryDark, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   inningsLabel: { color: Colors.textSecondary, fontSize: 12, marginBottom: 4 },
   score: { fontSize: 48, fontWeight: '900', color: Colors.text },
@@ -752,4 +946,5 @@ const styles = StyleSheet.create({
   playerOptionSelected: { borderColor: Colors.accent, backgroundColor: Colors.accent + '22' },
   modalBtns: { marginTop: 16, gap: 8 },
   modalBtn: { padding: 14, borderRadius: 10, alignItems: 'center' },
+  reasonInput: { backgroundColor: Colors.background, color: Colors.text, borderRadius: 8, padding: 12, marginTop: 16, borderWidth: 1, borderColor: Colors.border, fontSize: 14 },
 });

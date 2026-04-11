@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, SafeAreaView,
-  TouchableOpacity, StatusBar,
+  TouchableOpacity, StatusBar, Platform
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -35,7 +35,7 @@ export default function HomeScreen() {
   };
 
   return (
-    <SafeAreaView style={GlobalStyles.screen}>
+    <SafeAreaView style={[GlobalStyles.screen, styles.safeArea]}>
       <StatusBar barStyle="light-content" backgroundColor={Colors.primaryDark} />
       <ScrollView>
         {/* Header */}
@@ -52,7 +52,7 @@ export default function HomeScreen() {
         {/* Quick Actions */}
         <Text style={GlobalStyles.sectionHeader}>Quick Actions</Text>
         <View style={styles.quickGrid}>
-          <TouchableOpacity style={styles.quickCard} onPress={() => navigation.navigate('MatchSetup')}>
+          <TouchableOpacity style={styles.quickCard} onPress={() => navigation.navigate('MatchSetup', {})}>
             <Text style={styles.quickIcon}>🏏</Text>
             <Text style={styles.quickLabel}>New Match</Text>
           </TouchableOpacity>
@@ -64,7 +64,7 @@ export default function HomeScreen() {
             <Text style={styles.quickIcon}>🏟️</Text>
             <Text style={styles.quickLabel}>Create Team</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.quickCard} onPress={() => {}}>
+          <TouchableOpacity style={styles.quickCard} onPress={() => (navigation as any).navigate('Matches')}>
             <Text style={styles.quickIcon}>📊</Text>
             <Text style={styles.quickLabel}>History</Text>
           </TouchableOpacity>
@@ -82,8 +82,8 @@ export default function HomeScreen() {
               key={m._id}
               style={GlobalStyles.card}
               onPress={() =>
-                m.status === 'live'
-                  ? null /* navigate to live scoring */
+                (m.status === 'live' || m.status === 'interrupted')
+                  ? navigation.navigate('LiveScoring', { matchId: m._id })
                   : navigation.navigate('Scorecard', { matchId: m._id })
               }>
               <View style={GlobalStyles.spaceBetween}>
@@ -105,6 +105,9 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
+  },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     padding: 20, backgroundColor: Colors.primaryDark,

@@ -1,4 +1,4 @@
-import { StyleSheet } from 'react-native';
+import { StyleSheet, Platform, StatusBar } from 'react-native';
 
 export const Colors = {
   primary: '#1A6B3C',
@@ -38,6 +38,7 @@ export const GlobalStyles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: Colors.background,
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
   card: {
     backgroundColor: Colors.surface,

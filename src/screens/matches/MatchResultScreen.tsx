@@ -38,17 +38,26 @@ export default function MatchResultScreen() {
 
   const winner = matchData?.team1Id?._id === result?.winnerId ? matchData?.team1Id : matchData?.team2Id;
   const isTie = result?.type === 'tie';
+  const isOther = result?.type && !['runs', 'wickets', 'tie'].includes(result.type);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.primaryDark }}>
       <StatusBar barStyle="light-content" backgroundColor={Colors.primaryDark} />
       <View style={styles.container}>
-        <Text style={styles.trophy}>{isTie ? '🤝' : '🏆'}</Text>
+        <Text style={styles.trophy}>{isTie ? '🤝' : isOther ? '⚠️' : '🏆'}</Text>
 
         {isTie ? (
           <>
             <Text style={styles.resultTitle}>Match Tied!</Text>
             <Text style={styles.matchName}>{matchData?.name}</Text>
+          </>
+        ) : isOther ? (
+          <>
+            <Text style={styles.resultTitle}>Match Ended</Text>
+            <Text style={{ color: Colors.textSecondary, fontSize: 16, marginTop: 4, textAlign: 'center', fontWeight: '500' }}>
+              {result?.note ? result.note : (result?.type === 'incomplete' ? 'Incomplete' : String(result?.type || '').charAt(0).toUpperCase() + String(result?.type || '').slice(1))}
+            </Text>
+            <Text style={[styles.matchName, { marginTop: 12 }]}>{matchData?.name}</Text>
           </>
         ) : (
           <>

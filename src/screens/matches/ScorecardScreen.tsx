@@ -32,6 +32,7 @@ export default function ScorecardScreen() {
   const result = matchData?.result;
   const winner = matchData?.team1Id?._id === result?.winnerId ? matchData?.team1Id : matchData?.team2Id;
   const isTie = result?.type === 'tie';
+  const isOther = result?.type && !['runs', 'wickets', 'tie'].includes(result.type);
 
   return (
     <SafeAreaView style={GlobalStyles.screen}>
@@ -41,7 +42,9 @@ export default function ScorecardScreen() {
             <Text style={styles.resultBannerText}>
               {isTie 
                 ? 'Match Tied' 
-                : `${winner?.name || 'Team'} won by ${result.margin} ${result.type}`}
+                : isOther
+                  ? `Match Ended: ${result.note ? result.note : (result.type === 'incomplete' ? 'Incomplete' : String(result.type || '').charAt(0).toUpperCase() + String(result.type || '').slice(1))}`
+                  : `${winner?.name || 'Team'} won by ${result.margin} ${result.type}`}
             </Text>
           </View>
         )}
@@ -73,11 +76,11 @@ export default function ScorecardScreen() {
                     <Text style={styles.playerCell}>{b.player.name}</Text>
                     <Text style={styles.dismissalCell}>
                       {b.isOut ? (
-                        b.wicketInfo?.type === 'caught' ? `c ${b.wicketInfo?.fielderId?.name || ''}` :
+                        b.wicketInfo?.type === 'caught' ? `c ${b.wicketInfo?.fielderId?.name || ''} b ${b.bowler?.name || ''}`.trim() :
                         b.wicketInfo?.type === 'runOut' ? `run out ${b.wicketInfo?.fielderId ? '(' + b.wicketInfo.fielderId.name + ')' : ''}` :
-                        b.wicketInfo?.type === 'stumped' ? `st ${b.wicketInfo?.fielderId?.name || ''}` :
-                        b.wicketInfo?.type === 'bowled' ? 'b' :
-                        b.wicketInfo?.type === 'lbw' ? 'lbw' :
+                        b.wicketInfo?.type === 'stumped' ? `st ${b.wicketInfo?.fielderId?.name || ''} b ${b.bowler?.name || ''}`.trim() :
+                        b.wicketInfo?.type === 'bowled' ? `b ${b.bowler?.name || ''}`.trim() :
+                        b.wicketInfo?.type === 'lbw' ? `lbw b ${b.bowler?.name || ''}`.trim() :
                         (b.wicketInfo?.type || 'out')
                       ) : 'not out'}
                     </Text>
@@ -117,6 +120,27 @@ export default function ScorecardScreen() {
                 </View>
               ))}
             </View>
+
+            {inn.innings.playerChangeReasons && inn.innings.playerChangeReasons.length > 0 && (
+              <>
+                <Text style={GlobalStyles.sectionHeader}>PLAYER CHANGES</Text>
+                <View style={GlobalStyles.card}>
+                  {inn.innings.playerChangeReasons.map((pcr: any, i: number) => (
+                    <View key={i} style={{ marginBottom: i < inn.innings.playerChangeReasons.length - 1 ? 12 : 0 }}>
+                      <Text style={{ color: Colors.text, fontWeight: '700', fontSize: 13 }}>
+                        {pcr.playerId?.name || 'Unknown'} 
+                        <Text style={{ fontWeight: '400', color: Colors.textSecondary }}>
+                          {' '}({pcr.role === 'striker' ? 'Batter' : pcr.role === 'nonStriker' ? 'Batter' : 'Bowler'})
+                        </Text>
+                      </Text>
+                      <Text style={{ color: pcr.reason === 'injury' ? Colors.error : Colors.warning, fontSize: 12, marginTop: 4, fontWeight: '600' }}>
+                        {pcr.reason.toUpperCase()}: <Text style={{ color: Colors.textMuted, fontWeight: '400' }}>{pcr.description}</Text>
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </>
+            )}
           </View>
         ))}
         {data.length === 0 && (
